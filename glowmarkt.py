@@ -15,53 +15,72 @@ P1W = "P1W"
 P1M = "P1M"
 P1Y = "P1Y"
 
+
 class Rate:
     pass
+
 
 class Pence:
     def __init__(self, value):
         self.value = value
+
     def __str__(self):
         return "%.2f p" % self.value
+
     def unit(self):
         return "pence"
+
 
 class KWH:
     def __init__(self, value):
         self.value = value
+
     def __str__(self):
         return "%.3f kWh" % self.value
+
     def unit(self):
         return "kWh"
+
 
 class Unknown:
     def __init__(self, value):
         self.value = value
+
     def __str__(self):
         return "%s" % self.value
+
     def unit(self):
         return "unknown"
+
 
 class VirtualEntity:
     def get_resources(self):
         return self.client.get_resources(self.id)
 
+
 class Tariff:
     pass
+
 
 class Resource:
     def get_readings(self, t_from, t_to, period, func="sum"):
         return self.client.get_readings(self.id, t_from, t_to, period, func)
+
     def get_current(self):
         return self.client.get_current(self.id)
+
     def get_meter_reading(self):
         return self.client.get_meter_reading(self.id)
+
     def get_tariff(self):
         return self.client.get_tariff(self.id)
+
     def round(self, when, period):
         return self.client.round(when, period)
+
     def catchup(self):
         return self.client.catchup(self.id)
+
 
 class BrightClient:
     def __init__(self, username, password):
@@ -176,7 +195,7 @@ class BrightClient:
             r.client = self
 
             resources.append(r)
-            
+
         return resources
 
     def round(self, when, period):
@@ -360,7 +379,7 @@ class BrightClient:
             cls = Unknown
 
         return [
-            [datetime.datetime.fromtimestamp(v[0], tz = utc), cls(v[1])]
+            [datetime.datetime.fromtimestamp(v[0], tz=utc), cls(v[1])]
             for v in resp["data"]
         ]
 
@@ -395,7 +414,7 @@ class BrightClient:
             rt.rate = Pence(elt["currentRates"]["rate"])
             rt.standing_charge = Pence(elt["currentRates"]["standingCharge"])
             rt.tier = None
-            
+
             t.current_rates = rt
 
             # rts = []
@@ -408,6 +427,5 @@ class BrightClient:
             #     rts.append(rt)
 
             # t.structure = rts
-        
-        return t
 
+        return t
