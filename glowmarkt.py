@@ -59,7 +59,10 @@ class Reading:
         self.value = cls(data[1])
 
     def datetime(self):
-        return datetime.datetime.fromtimestamp(self.utc).astimezone()
+        return datetime.datetime.fromtimestamp(self.utc, tz=datetime.timezone.utc)
+
+    def __str__(self):
+        return f'{self.datetime().strftime("%Y-%m-%d %H:%M")} {self.value.value}'
 
 
 class Readings(list):
@@ -204,7 +207,11 @@ class BrightClient:
                 raise RuntimeError("to_from/t_to should be date/datetime")
             return self.round(x, period).replace(tzinfo=None).isoformat()
 
-        offset = -t_from.utcoffset().seconds / 60  # Offset in minutes
+        # Offset in minutes
+        try:
+            offset = t_from.utc_offset().seconds / 60 if tz else 0
+        except:
+            offset = 0
 
         params = {
             "from": time_string(t_from),
