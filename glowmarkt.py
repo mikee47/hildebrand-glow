@@ -75,7 +75,8 @@ class Readings(list):
         else:
             cls = Unknown
         for v in data["data"]:
-            self.append(Reading(v, cls, offset))
+            if v[1] is not None:
+                self.append(Reading(v, cls, offset))
 
 
 class VirtualEntity:
@@ -218,6 +219,7 @@ class BrightClient:
             "to": time_string(t_to),
             "period": period,
             "offset": offset,
+            "nulls": 1,
             "function": func,
         }
 
