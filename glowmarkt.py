@@ -1,4 +1,4 @@
-# 
+#
 # Based on https://github.com/cybermaggedon/pyglowmarkt
 #
 
@@ -28,18 +28,18 @@ class Pence:
         return "%.2f p" % self.value
 
     def unit(self):
-        return "pence"
+        return "p"
 
 
 class KWH:
     def __init__(self, value):
-        self.value = value
+        self.value = round(value * 1000)
 
     def __str__(self):
-        return "%.3f kWh" % self.value
+        return f"{self.value} Wh"
 
     def unit(self):
-        return "kWh"
+        return "Wh"
 
 
 class Unknown:
@@ -53,6 +53,28 @@ class Unknown:
         return "unknown"
 
 
+class Reading:
+    def __init__(self, data: tuple, cls, offset):
+        self.utc = data[0] + 60 * offset
+        self.value = cls(data[1])
+
+    def datetime(self):
+        return datetime.datetime.fromtimestamp(self.utc).astimezone()
+
+
+class Readings(list):
+    def __init__(self, data, offset):
+        self.data = data
+        if data["units"] == "pence":
+            cls = Pence
+        elif data["units"] == "kWh":
+            cls = KWH
+        else:
+            cls = Unknown
+        for v in data["data"]:
+            self.append(Reading(v, cls, offset))
+
+
 class VirtualEntity:
     def __init__(self, client, data):
         self.client = client
@@ -64,7 +86,9 @@ class VirtualEntity:
         self.name = data.get("name")
 
     def get_resources(self):
-        return self.client.get_resources(self.id)
+        resp = self.client.api_get(f"virtualentity/{self.id}/resources")
+        print(json.dumps(resp, indent=2))
+        return dict((elt["name"], Resource(self, elt)) for elt in resp["resources"])
 
 
 class Tariff:
@@ -72,8 +96,10 @@ class Tariff:
 
 
 class Resource:
-    def __init__(self, client, data):
-        self.client = client
+    def __init__(self, ve, data):
+        self.ve = ve
+        self.client = ve.client
+        self.data = data
         self.id = data["resourceId"]
         self.type_id = data["resourceTypeId"]
         self.name = data["name"]
@@ -81,14 +107,11 @@ class Resource:
         self.description = data["description"]
         self.base_unit = data["baseUnit"]
 
-    def get_readings(self, t_from, t_to, period, func="sum"):
+    def get_readings(self, t_from, t_to, period="PT30M", func="sum"):
         return self.client.get_readings(self.id, t_from, t_to, period, func)
 
     def get_current(self):
         return self.client.get_current(self.id)
-
-    def get_meter_reading(self):
-        return self.client.get_meter_reading(self.id)
 
     def get_tariff(self):
         return self.client.get_tariff(self.id)
@@ -115,10 +138,13 @@ class BrightClient:
             "token": self.token
         }
 
+        print(f"GET {path}")
+
         resp = self.session.get(
             f"{self.url}/{path}", headers=headers, params=params)
         if resp.status_code != 200:
-            raise RuntimeError("GET failed")
+            print(resp.text)
+            # raise RuntimeError("GET failed")
 
         return resp.json()
 
@@ -129,7 +155,7 @@ class BrightClient:
             "token": self.token
         }
 
-        resp = self.session.get(
+        resp = self.session.post(
             f"{self.url}/{path}", headers=headers, data=json.dumps(data))
         if resp.status_code != 200:
             raise RuntimeError("POST failed")
@@ -149,89 +175,55 @@ class BrightClient:
 
     def get_virtual_entities(self):
         resp = self.api_get("virtualentity")
-        return [VirtualEntity(self, elt) for elt in resp]
-
-    def get_resources(self, ve):
-        resp = self.api_get(f"virtualentity/{ve}/resources")
-        return [Resource(self, elt) for elt in resp]
+        return dict((elt["name"], VirtualEntity(self, elt)) for elt in resp)
 
     def round(self, when, period):
-
-        # Work out a rounding value.  Readings seem to be more accurate if
-        # rounded to the near thing...
-        if period == "PT1M":
+        # Work out a rounding value.  Readings seem to be more accurate if rounded to the near thing...
+        if period == PT1M:
             when = when.replace(second=0, microsecond=0)
-        elif period == "PT30M":
-            when = when.replace(minute=int(when.minute / 30),
-                                second=0,
-                                microsecond=0)
-        elif period == "PT1H":
-            when = when.replace(minute=0,
-                                second=0,
-                                microsecond=0)
-        elif period == "P1D":
-            when = when.replace(hour=0, minute=0,
-                                second=0,
-                                microsecond=0)
-        elif period == "P1W":
-            when = when.replace(hour=0, minute=0,
-                                second=0,
-                                microsecond=0)
-        elif period == "P1M":
+        elif period == PT30M:
+            when = when.replace(minute=when.minute // 30,
+                                second=0, microsecond=0)
+        elif period == PT1H:
+            when = when.replace(minute=0, second=0, microsecond=0)
+        elif period == P1D:
+            when = when.replace(hour=0, minute=0, second=0, microsecond=0)
+        elif period == P1W:
+            when = when.replace(hour=0, minute=0, second=0, microsecond=0)
+        elif period == P1M:
             when = when.replace(day=1, hour=0, minute=0,
-                                second=0,
-                                microsecond=0)
+                                second=0, microsecond=0)
         else:
             raise RuntimeError("Period %s not known" % period)
 
         return when
 
     def get_readings(self, resource, t_from, t_to, period, func="sum"):
-        utc = datetime.timezone.utc
-
-        # Offset in minutes
-        offset = -t_from.utcoffset().seconds / 60
-
         def time_string(x):
-            if isinstance(x, datetime.datetime):
-                x = x.replace(tzinfo=None)
-                return x.isoformat()
-            elif isinstance(x, datetime.date):
-                x = x.replace(tzinfo=None)
-                return x.isoformat()
-            else:
+            if not isinstance(x, datetime.datetime) and not isinstance(x, datetime.date):
                 raise RuntimeError("to_from/t_to should be date/datetime")
+            return self.round(x, period).replace(tzinfo=None).isoformat()
 
-        t_from = time_string(t_from)
-        t_to = time_string(t_to)
+        offset = -t_from.utcoffset().seconds / 60  # Offset in minutes
 
         params = {
-            "from": t_from,
-            "to": t_to,
+            "from": time_string(t_from),
+            "to": time_string(t_to),
             "period": period,
             "offset": offset,
             "function": func,
         }
 
+        print(params)
+
         resp = self.api_get(f"resource/{resource}/readings", params)
-
-        if resp["units"] == "pence":
-            cls = Pence
-        elif resp["units"] == "kWh":
-            cls = KWH
-        else:
-            cls = Unknown
-
-        return [
-            [datetime.datetime.fromtimestamp(v[0] + 60 * offset).astimezone(),
-             cls(v[1])]
-            for v in resp["data"]
-        ]
+        return Readings(resp, offset)
 
     def get_current(self, resource):
         # Tried it against the API, no data is returned
-        utc = datetime.timezone.utc
         resp = self.api_get(f"resource/{resource}/current")
+
+        return resp
 
         if len(resp["data"]) < 1:
             raise RuntimeError("Current reading not returned")
@@ -250,31 +242,10 @@ class BrightClient:
             cls(resp["data"][0][1])
         ]
 
-    def get_meter_reading(self, resource):
-        # Tried it against the API, an error is returned
-        raise RuntimeError("Not implemented.")
-
-        utc = datetime.timezone.utc
-
-        resp = self.api_get(f"resource/{resource}/meterread")
-
-        if len(resp["data"]) < 1:
-            raise RuntimeError("Meter reading not returned")
-
-        if resp["units"] == "pence":
-            cls = Pence
-        elif resp["units"] == "kWh":
-            cls = KWH
-        else:
-            cls = Unknown
-
-        return [
-            [datetime.datetime.fromtimestamp(v[0], tz=utc), cls(v[1])]
-            for v in resp["data"]
-        ]
-
     def get_tariff(self, resource):
-        resp = self.api_get(f"resource/{resource}/tariff", headers=headers)
+        resp = self.api_get(f"resource/{resource}/tariff")
+
+        return resp
 
         ts = []
 
