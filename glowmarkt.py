@@ -54,6 +54,15 @@ class Unknown:
 
 
 class VirtualEntity:
+    def __init__(self, client, data):
+        self.client = client
+        self.data = data
+        self.application = data["applicationId"]
+        self.type_id = data["veTypeId"]
+        self.id = data["veId"]
+        self.postal_code = data.get("postalCode")
+        self.name = data.get("name")
+
     def get_resources(self):
         return self.client.get_resources(self.id)
 
@@ -63,6 +72,15 @@ class Tariff:
 
 
 class Resource:
+    def __init__(self, client, data):
+        self.client = client
+        self.id = data["resourceId"]
+        self.type_id = data["resourceTypeId"]
+        self.name = data["name"]
+        self.classifier = data["classifier"]
+        self.description = data["description"]
+        self.base_unit = data["baseUnit"]
+
     def get_readings(self, t_from, t_to, period, func="sum"):
         return self.client.get_readings(self.id, t_from, t_to, period, func)
 
@@ -79,124 +97,63 @@ class Resource:
         return self.client.round(when, period)
 
     def catchup(self):
-        return self.client.catchup(self.id)
+        # Tried it against the API, no data is returned
+        return self.client.api_get(f"resource/{resource}/catchup")
 
 
 class BrightClient:
-    def __init__(self, username, password):
-        self.username = username
-        self.password = password
+    def __init__(self):
         self.application = "b0f1b774-a586-4f72-9edd-27ead8aa7a8d"
         self.url = "https://api.glowmarkt.com/api/v0-1/"
         self.session = requests.Session()
+        self.token = None
 
-        self.token = self.authenticate()
-
-    def authenticate(self):
-
+    def api_get(self, path, params={}):
         headers = {
             "Content-Type": "application/json",
-            "applicationId": self.application
+            "applicationId": self.application,
+            "token": self.token
         }
 
+        resp = self.session.get(
+            f"{self.url}/{path}", headers=headers, params=params)
+        if resp.status_code != 200:
+            raise RuntimeError("GET failed")
+
+        return resp.json()
+
+    def api_post(self, path, data):
+        headers = {
+            "Content-Type": "application/json",
+            "applicationId": self.application,
+            "token": self.token
+        }
+
+        resp = self.session.get(
+            f"{self.url}/{path}", headers=headers, data=json.dumps(data))
+        if resp.status_code != 200:
+            raise RuntimeError("POST failed")
+
+        return resp.json()
+
+    def authenticate(self, username, password):
         data = {
             "username": self.username,
             "password": self.password
         }
 
-        url = f"{self.url}auth"
-
-        resp = self.session.post(url, headers=headers, data=json.dumps(data))
-
-        if resp.status_code != 200:
+        resp = self.api_post("auth", data=json.dumps(data))
+        self.token = resp.get("token")
+        if resp["valid"] != True or self.token is None:
             raise RuntimeError("Authentication failed")
 
-        resp = resp.json()
-
-        if resp["valid"] == False:
-            raise RuntimeError("Expected an authentication token")
-
-        if "token" not in resp:
-            raise RuntimeError("Expected an authentication token")
-
-        return resp["token"]
-
     def get_virtual_entities(self):
-
-        headers = {
-            "Content-Type": "application/json",
-            "applicationId": self.application,
-            "token": self.token
-        }
-
-        url = f"{self.url}virtualentity"
-
-        resp = self.session.get(url, headers=headers)
-
-        if resp.status_code != 200:
-            raise RuntimeError("Request failed")
-
-        resp = resp.json()
-
-        ves = []
-
-        for elt in resp:
-
-            ve = VirtualEntity()
-
-            ve.client = self
-
-            ve.application = elt["applicationId"]
-            ve.type_id = elt["veTypeId"]
-            ve.id = elt["veId"]
-
-            if "postalCode" in elt:
-                ve.postal_code = elt["postalCode"]
-            else:
-                ve.postal_code = None
-
-            if "name" in elt:
-                ve.name = elt["name"]
-            else:
-                ve.name = None
-
-            ves.append(ve)
-
-        return ves
+        resp = self.api_get("virtualentity")
+        return [VirtualEntity(self, elt) for elt in resp]
 
     def get_resources(self, ve):
-
-        headers = {
-            "Content-Type": "application/json",
-            "applicationId": self.application,
-            "token": self.token
-        }
-
-        url = f"{self.url}virtualentity/{ve}/resources"
-
-        resp = self.session.get(url, headers=headers)
-
-        if resp.status_code != 200:
-            raise RuntimeError("Request failed")
-
-        resp = resp.json()
-
-        resources = []
-
-        for elt in resp["resources"]:
-            r = Resource()
-            r.id = elt["resourceId"]
-            r.type_id = elt["resourceTypeId"]
-            r.name = elt["name"]
-            r.classifier = elt["classifier"]
-            r.description = elt["description"]
-            r.base_unit = elt["baseUnit"]
-
-            r.client = self
-
-            resources.append(r)
-
-        return resources
+        resp = self.api_get(f"virtualentity/{ve}/resources")
+        return [Resource(self, elt) for elt in resp]
 
     def round(self, when, period):
 
@@ -230,13 +187,6 @@ class BrightClient:
         return when
 
     def get_readings(self, resource, t_from, t_to, period, func="sum"):
-
-        headers = {
-            "Content-Type": "application/json",
-            "applicationId": self.application,
-            "token": self.token
-        }
-
         utc = datetime.timezone.utc
 
         # Offset in minutes
@@ -263,14 +213,7 @@ class BrightClient:
             "function": func,
         }
 
-        url = f"{self.url}resource/{resource}/readings"
-
-        resp = self.session.get(url, headers=headers, params=params)
-
-        if resp.status_code != 200:
-            raise RuntimeError("Request failed")
-
-        resp = resp.json()
+        resp = self.api_get(f"resource/{resource}/readings", params)
 
         if resp["units"] == "pence":
             cls = Pence
@@ -286,26 +229,9 @@ class BrightClient:
         ]
 
     def get_current(self, resource):
-
         # Tried it against the API, no data is returned
-
-        headers = {
-            "Content-Type": "application/json",
-            "applicationId": self.application,
-            "token": self.token
-        }
-
         utc = datetime.timezone.utc
-
-        url = f"{self.url}resource/{resource}/current"
-
-        resp = self.session.get(url, headers=headers)
-
-        if resp.status_code != 200:
-            print(resp.text)
-            raise RuntimeError("Request failed")
-
-        resp = resp.json()
+        resp = self.api_get(f"resource/{resource}/current")
 
         if len(resp["data"]) < 1:
             raise RuntimeError("Current reading not returned")
@@ -324,49 +250,13 @@ class BrightClient:
             cls(resp["data"][0][1])
         ]
 
-    def catchup(self, resource):
-
-        # Tried it against the API, no data is returned
-
-        headers = {
-            "Content-Type": "application/json",
-            "applicationId": self.application,
-            "token": self.token
-        }
-
-        url = f"{self.url}resource/{resource}/catchup"
-
-        resp = self.session.get(url, headers=headers)
-
-        if resp.status_code != 200:
-            print(resp.text)
-            raise RuntimeError("Request failed")
-
-        resp = resp.json()
-
-        return resp
-
     def get_meter_reading(self, resource):
-
         # Tried it against the API, an error is returned
         raise RuntimeError("Not implemented.")
 
-        headers = {
-            "Content-Type": "application/json",
-            "applicationId": self.application,
-            "token": self.token
-        }
-
         utc = datetime.timezone.utc
 
-        url = f"{self.url}resource/{resource}/meterread"
-
-        resp = self.session.get(url, headers=headers)
-
-        if resp.status_code != 200:
-            raise RuntimeError("Request failed")
-
-        resp = resp.json()
+        resp = self.api_get(f"resource/{resource}/meterread")
 
         if len(resp["data"]) < 1:
             raise RuntimeError("Meter reading not returned")
@@ -384,21 +274,7 @@ class BrightClient:
         ]
 
     def get_tariff(self, resource):
-
-        headers = {
-            "Content-Type": "application/json",
-            "applicationId": self.application,
-            "token": self.token
-        }
-
-        url = f"{self.url}resource/{resource}/tariff"
-
-        resp = self.session.get(url, headers=headers)
-
-        if resp.status_code != 200:
-            raise RuntimeError("Request failed")
-
-        resp = resp.json()
+        resp = self.api_get(f"resource/{resource}/tariff", headers=headers)
 
         ts = []
 
