@@ -14,15 +14,21 @@ gas_data = open("gas.txt", "a")
 for ve in virtualEntities.values():
     print(f"Virtual Entity '{ve.name}'")
     print(json.dumps(ve.data, indent=2))
+    print()
     resources = ve.get_resources()
-    print("Resources: ")
     for res in resources.values():
         print(f"Resource '{res.name}'")
         print(json.dumps(res.data, indent=2))
-        tariff = res.get_tariff()
-        print(json.dumps(tariff, indent=2))
-        current = res.get_current()
-        print(json.dumps(current, indent=2))
+        print()
+        if not res.classifier.endswith('.consumption'):
+            continue
+        for tariff in res.get_tariff():
+            print(json.dumps(tariff.data, indent=2))
+            print(str(tariff))
+        print()
+        # current = res.get_current()
+        # print(json.dumps(current, indent=2))
+        # print()
     print("====")
 
     # t_from = datetime.datetime.now().replace(hour=0, minute=0, second=0)

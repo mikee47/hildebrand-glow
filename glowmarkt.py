@@ -16,10 +16,6 @@ P1M = "P1M"
 P1Y = "P1Y"
 
 
-class Rate:
-    pass
-
-
 class Pence:
     def __init__(self, value):
         self.value = value
@@ -29,6 +25,33 @@ class Pence:
 
     def unit(self):
         return "p"
+
+
+class Time(int):
+    def __new__(cls, value):
+        h, m = value.split(':')
+        return int.__new__(cls, int(h) * 60 + int(m))
+
+    def __str__(self):
+        return "%02u:%02u" % (self // 60, self % 60)
+
+
+class Rate:
+    def __init__(self, data):
+        self.data = data
+        self.value = Pence(data['tourate'])
+        self.tier = data['tier']
+        t_from, t_to = data['time'].split('-')
+        self.time_from = Time(t_from)
+        self.time_to = Time(t_to)
+
+    def __str__(self):
+        return f"{self.value} from {self.time_from} to {self.time_to}."
+
+    def contains(time: Time):
+        if self.time_from <= self.time_to:
+            return time >= self.time_from and time < self.time_to
+        return time >= self.time_from or time < self.time_to
 
 
 class KWH:
@@ -91,12 +114,36 @@ class VirtualEntity:
 
     def get_resources(self):
         resp = self.client.api_get(f"virtualentity/{self.id}/resources")
-        print(json.dumps(resp, indent=2))
+        # print(json.dumps(resp, indent=2))
         return dict((elt["name"], Resource(self, elt)) for elt in resp["resources"])
 
 
 class Tariff:
-    pass
+    def __init__(self, resource, data):
+        self.resource = resource
+        if 'plan' in data:
+            del data['plan']
+        self.data = data
+
+        for f in ["name", "commodity", "cid", "type"]:
+            setattr(self, f, data[f])
+
+        self.rates = []
+        for r in data['structure'][0]['planDetail']:
+            if 'standing' in r:
+                self.standing_charge = Pence(r['standing'])
+            elif 'rate' in r:
+                self.standard_rate = Pence(r['rate'])
+            elif 'tourate' in r:
+                self.rates.append(Rate(r))
+            else:
+                print("Unknown: ", r)
+
+    def __str__(self):
+        s = f"Standing charge {self.standing_charge}, standard {self.standard_rate}"
+        for r in self.rates:
+            s += f", {r}"
+        return s
 
 
 class Resource:
@@ -118,7 +165,8 @@ class Resource:
         return self.client.get_current(self.id)
 
     def get_tariff(self):
-        return self.client.get_tariff(self.id)
+        resp = self.client.api_get(f"resource/{self.id}/tariff")
+        return [Tariff(self, elt) for elt in resp["data"]]
 
     def round(self, when, period):
         return self.client.round(when, period)
@@ -250,38 +298,3 @@ class BrightClient:
             datetime.datetime.fromtimestamp(resp["data"][0][0]).astimezone(),
             cls(resp["data"][0][1])
         ]
-
-    def get_tariff(self, resource):
-        resp = self.api_get(f"resource/{resource}/tariff")
-
-        return resp
-
-        ts = []
-
-        for elt in resp["data"]:
-
-            t = Tariff()
-            t.name = elt["name"]
-            t.commodity = elt["commodity"]
-            t.cid = elt["cid"]
-            t.type = elt["type"]
-
-            rt = Rate()
-            rt.rate = Pence(elt["currentRates"]["rate"])
-            rt.standing_charge = Pence(elt["currentRates"]["standingCharge"])
-            rt.tier = None
-
-            t.current_rates = rt
-
-            # rts = []
-            # for elt2 in elt["structure"]:
-
-            #     rt = Rate()
-            #     rt.rate = elt2["planDetail"]["rate"]
-            #     rt.standing_charge = elt2["planDetail"]["standing"]
-            #     rt.tier = elt2["planDetail"]["tier"]
-            #     rts.append(rt)
-
-            # t.structure = rts
-
-        return t
